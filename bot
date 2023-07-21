@@ -1,0 +1,416 @@
+//Group config
+const cf = require('./config.js')
+const data = require('./data.js')
+let globalC = cf.ethereum
+
+
+let topic = globalC.topic
+let topicNft = globalC.topicnft
+let devGroup = cf.devGroup
+//let nftGroup = globalC.nftGroup
+let tokenExplorer = globalC.explorer
+let chainName = globalC.name
+let tokenGroup = cf.group
+let devTimeout 
+function clearVar() {
+    devTimeout = null;
+    //console.log("Variable cleared!");
+}
+
+// Set an interval to clear the variable every 10 minutes
+setInterval(clearVar, 30 * 60 * 1000); // 10 minutes in milliseconds
+
+
+const tokenAbi = require('./abi/tokenabi.json')
+const ethers = require("ethers")
+//const twilio = require('twilio')
+
+const rpcProvider = new ethers.providers.JsonRpcProvider(globalC.http)
+//Mongo Vars
+const { MongoClient } = require('mongodb')
+const client = new MongoClient('mongodb://localhost:27017/')
+let topHoldersDb
+let waitListDb
+
+let waitList
+let topHolders
+//AbiCoder
+//const abiDecoder = require('abi-decoder')
+//const nftAbi = require('./abi/nftabi.json')
+//abiDecoder.addABI(nftAbi)
+
+
+// Логгирование
+const log4js = require("log4js")
+log4js.configure({
+    appenders: {
+        out: { type: 'stdout' },
+        app: { type: 'file', filename: `out_${chainName}.log` }
+    },
+    categories: {
+        default: { appenders: ['out', 'app'], level: 'debug' }
+    }
+});
+const logger = log4js.getLogger()
+
+//Bot INIT
+const Telegram = require('telegraf/telegram')
+const telegram = new Telegram(cf.BOT_TOKEN)
+
+let textSettings = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, disable_notification: true, message_thread_id: topic }
+let textSettingsNft = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, disable_notification: true, message_thread_id: topicNft }
+let textSettingsLoud = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, disable_notification: false }
+
+
+let lastBlock
+let currBlock
+
+async function timeout(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForContract() {
+    try {
+        /*await client.connect()
+        console.log('Connection Up')
+        topHoldersDb = client.db('bot').collection('topHolders')
+        topHolders = await topHoldersDb.find().toArray()
+        waitListDb = client.db('bot').collection('waitList')
+        waitList = await waitListDb.find().toArray()
+        */
+        lastBlock = await rpcProvider.getBlockNumber()
+        //console.log(lastBlock)
+        setInterval(pollBlockNumber, 17000)
+        /*        while (true) {
+
+                    currBlock = await rpcProvider.getBlockNumber()
+                    //console.log(currBlock)
+                    for (let num = lastBlock; num <= currBlock; num++) {
+                        //console.log(num)
+                        await timeout(300)
+                        checkBlock(num)
+                    }
+                    lastBlock = currBlock + 1
+                    await timeout(3000)
+                }*/
+
+
+        telegram.sendMessage(tokenGroup, 'Запустился', textSettings)
+
+
+    } catch (error) {
+        await telegram.sendMessage(tokenGroup, 'Сбой в настройках бота ', textSettings)
+        logger.error(error)
+    }
+}
+
+async function pollBlockNumber() {
+    rpcProvider.getBlockNumber().then(async (currBuff) => {
+        currBlock = currBuff
+        let lastBuff = lastBlock
+        lastBlock = currBlock + 1
+        //let currBuff = currBlock
+        //console.log(currBlock)
+        for (let num = lastBuff; num <= currBuff; num++) {
+            console.log(num)
+            //await timeout(5000)
+            await checkBlock(num)
+        }
+    }, (err) => logger.error(err.requestBody, 'Code: ', err.code))
+}
+
+
+async function checkBlock(blockNumber) {
+    let result = await rpcProvider.getBlockWithTransactions(blockNumber).catch(async (err) => {
+        logger.error('Block Number:', blockNumber, ' Code:', err.code)
+        await timeout(Math.floor(Math.random() * (5000 - 100 + 1) + 100))
+        await checkBlock(blockNumber)
+    })
+
+
+    for (const el of result.transactions) {
+        /*
+        for (const contract of waitList) {
+            if (el.to === contract.address) {
+                logger.info(el)
+                let score = 0
+                for (const holder of topHolders) {
+                    if (el.from === holder.wallet) {
+                        score += 1
+                    }
+                }
+                let updateWait = await waitListDb.findOne({ address: contract.address })
+                updateWait.score += score
+
+                //console.log(updateWait)
+                if (updateWait.alarm < 1 && updateWait.score > 0) {
+                    //console.log('B!!!')
+                    updateWait.alarm += 1
+                    //alarmNFT(updateWait)
+                } else if (updateWait.alarm < 2 && updateWait.score > 5) {
+                    updateWait.value.alarm += 2
+                    //alarmNFT(updateWait)
+                }
+                waitListDb.findOneAndUpdate({ address: contract.address }, { $set: { score: updateWait.score, alarm: updateWait.alarm } })
+            }
+        }
+        */
+    }
+    /*
+    *Если транзакция на нужный нам контракт
+    * Используем abiCoder
+    * подсовываем ему tx.data
+    * смотрим лог трансфера
+    * если трансфер с нулевого - минт
+    * смотрим кто посылал транзу
+    * если нужный нам - оповещаем
+    * Добавляем в базу в проект количество оповещений
+    * обновляем после каждого оповещения
+    * Также добавляем в базу сколько людей обратилось, при оповещении читаем из базы
+    * */
+
+
+    for (let element of result.transactions) {
+        if (element.to == null && element.creates) {
+            try {
+                let dev = data.pairs.find((el) => {
+                    if (element.from.toLowerCase() === el.creator.toLowerCase()) {
+                        return true
+                    }
+                })
+                if (dev) {
+                    await showDevs(element.creates, dev)//symbol[0]
+                    if (devTimeout !== dev.creator) {
+
+                        devTimeout = dev.creator
+                    } 
+                    
+                }
+                
+                let tokenContract = new ethers.Contract(element.creates, tokenAbi, rpcProvider)
+                tokenContract.functions.symbol().then(async (symbol) => {
+                    let nft = await checkNFT(tokenContract, element, symbol)
+                    if (!nft) {
+                        checkToken(tokenContract, element, symbol)
+                    }
+
+
+                }, () => {
+                    //telegram.sendMessage(tokenGroup, `\`Token?: https://etherscan\.io/address/${element.creates}\``,textSettings)
+                    //logger.info(`Token?: ${tokenExplorer}${element.creates}`)
+                    try {
+
+                        setTimeout(async () => {
+                            tokenContract.functions.symbol().then(async (symbol) => {
+                                await checkToken(tokenContract, element, symbol)
+                            }, () => {
+                                logger.error('no symbol')
+                            })
+                        }, 3600000)
+                    } catch (e) {
+                        logger.error(e)
+                    }
+                })
+            } catch (e) {
+                logger.error(e)
+            }
+        }
+    }
+    //logger.info(result.transactions);
+}
+
+async function checkNFT(tokenContract, element, symbol1) {
+    tokenContract.functions.supportsInterface(0x80ac58cd).then(async (tokenInterface) => {
+        let receiver5050 = await tokenContract.functions.supportsInterface(0xc8c6c9f3)
+
+        let sender5050 = await tokenContract.functions.supportsInterface(0x1a3f02f4)
+
+        let symbol = symbol1
+        let name = await tokenContract.functions.name().catch((err) => {
+            logger.error(err)
+        })
+        let supply = 0//await tokenContract.functions.totalSupply()
+        logger.info(tokenInterface)
+        if (sender5050[0]) {
+            showNFT(symbol[0], name[0], supply, element.creates, `\`5050 Sender\``)
+            return true
+        } else if (receiver5050[0]) {
+            showNFT(symbol[0], name[0], supply, element.creates, `\`5050 Receiver\``)
+            return true
+        } else if (tokenInterface[0]) {
+            showNFT(symbol[0], name[0], supply, element.creates, '')
+            return true
+        }
+
+        return false
+    }, (err) => {
+        //checkNFT(tokenContract, element)
+        logger.error(err.code)
+        return false
+    })
+
+
+}
+
+async function checkToken(tokenContract, element, symbol1) {
+    try {
+        let decimals = await tokenContract.functions.decimals()
+        let symbol = symbol1
+        let name = await tokenContract.functions.name()
+        let supply = await tokenContract.functions.totalSupply()
+        supply = ethers.utils.formatUnits(supply[0], decimals[0])
+        showBot(symbol[0], name[0], supply, decimals[0], element.creates)
+
+        let found = 0
+        cf.tickers.forEach((value) => {
+            let re = new RegExp(`${value}`, 'i')
+            let yes = symbol[0].match(re)
+            if (yes) {
+                found = 1
+                showFind(symbol[0], name[0], supply, decimals[0], element.creates, 'Найдено по тикеру')
+            }
+        })
+        cf.names.forEach((value) => {
+            let re = new RegExp(`${value}`, 'i')
+            let yes = symbol[0].match(re)
+            if (yes) {
+                found = 1
+                showFind(symbol[0], name[0], supply, decimals[0], element.creates, 'Найдено по названию в тикере ')
+            }
+            yes = name[0].match(re)
+            if (yes) {
+                found = 1
+                showFind(symbol[0], name[0], supply, decimals[0], element.creates, 'Найдено по названию')
+            }
+        })
+        if (found) {
+            //twilioCall()
+        }
+    } catch (e) {
+        logger.error(e.code)
+    }
+
+}
+
+/*
+async function twilioCall() {
+    let accountSid = 'ACc42443d0c4aa58dfa8a059de54b6cda3';
+    let authToken = 'dadaba66aed6f97a305ac9af339102b1';
+    let client = new twilio(accountSid, authToken);
+
+    client.calls
+        .create({
+            url: 'http://demo.twilio.com/docs/voice.xml',
+            to: '+79639781515',
+            from: '+19493045719'
+        })
+        .then(call => console.log(call.sid), (err) => console.log(err))
+    client.calls
+        .create({
+            url: 'http://demo.twilio.com/docs/voice.xml',
+            to: '+79154020909',
+            from: '+19493045719'
+        })
+        .then(call => console.log(call.sid), (err) => console.log(err))
+}
+*/
+
+
+async function alarmNFT(nftContract) {
+    try {
+        logger.info(nftContract)
+        await telegram.sendMessage(tokenGroup,
+            `ticker: \`${nftContract.symbol}\` 
+name: \`${nftContract.name}\` 
+score: \`${nftContract.score}\` 
+link: [${nftContract.address}]\(${tokenExplorer}${nftContract.address}\)
+🎁🎁🎁`,
+            textSettingsNft
+        )
+    } catch (e) {
+        logger.error(e)
+        await telegram.sendMessage(tokenGroup, nftContract, textSettingsNft)
+    }
+}
+
+async function showNFT(symbol, name, supply, id, type) {
+    try {
+        logger.info('Ticker: ', symbol, ' Name: ', name, ` Link: ${tokenExplorer}${id}`)
+        await telegram.sendMessage(tokenGroup,
+            `${type}
+            ticker: \`${symbol}\` 
+name: \`${name}\` 
+link: [${id}]\(${tokenExplorer}${id}\)`,
+            textSettingsNft
+        )
+    } catch (e) {
+        logger.error(e)
+        await telegram.sendMessage(tokenGroup, 'Ticker: ' + symbol + ' Name: ' + name + ` Link: ${tokenExplorer}${id}`, textSettingsNft)
+    }
+}
+
+
+async function showBot(symbolV, name, supply, decimals, id) {
+    try {
+        logger.info('Ticker: ', symbolV, ' Name: ', name, ' Supply: ', supply, ' Decimals: ', decimals, ` Link: ${tokenExplorer}${id}`)
+        await telegram.sendMessage(tokenGroup,
+            `ticker: \`${symbolV}\` 
+name: \`${name}\` 
+supply: \`${supply}\` dec: \`${decimals}\` 
+link: [${id}]\(${tokenExplorer}${id}\)`,
+            textSettings
+        )
+    } catch (e) {
+        logger.error(e)
+        await telegram.sendMessage(tokenGroup, 'Ticker: ' + symbolV + ' Name: ' + name + ' Supply: ' + supply + ' Decimals: ' + decimals + ` Link: ${tokenExplorer}${id}`, textSettings)
+    }
+}
+
+async function showDevs(id, dev) {
+    try {
+        //logger.info('Dev ')
+        await telegram.sendMessage(devGroup,
+            `*Developer*
+creator: [${dev.creator}]\(${tokenExplorer}${dev.creator}\)
+
+New token
+etherscan: [${id}]\(${tokenExplorer}${id}\)
+
+Old token
+name: *${dev.name}*
+date created: *${dev.created_at_timestamp}*
+volume usd: *${dev.volume_usd}*
+tx count: *${dev.tx_count}*
+dexscreener: [${dev.id_pair}]\(https://dexscreener.com/ethereum/${dev.id_pair}\)
+etherscan: [${dev.id_token}]\(${tokenExplorer}${dev.id_token}\)
+
+`,
+            textSettingsLoud
+        )
+    } catch (e) {
+        logger.error(e)
+        await telegram.sendMessage(devGroup, 'Ticker: ' + symbolV + ' Name: ' + name + ' Supply: ' + supply + ' Decimals: ' + decimals + ` Link: ${tokenExplorer}${id}`, textSettingsLoud)
+    }
+}
+
+async function showFind(symbolV, name, supply, decimals, id, dev) {
+    try {
+        logger.info('Dev ')
+        await telegram.sendMessage(devGroup,
+            `*Developer*
+about: *${dev}*
+
+ticker: \`${symbolV}\` 
+name: \`${name}\` 
+supply: \`${supply}\` dec: \`${decimals}\` 
+link: [${id}]\(${tokenExplorer}${id}\)`,
+            textSettingsLoud
+        )
+    } catch (e) {
+        logger.error(e)
+        await telegram.sendMessage(devGroup, 'Ticker: ' + symbolV + ' Name: ' + name + ' Supply: ' + supply + ' Decimals: ' + decimals + ` Link: ${tokenExplorer}${id}`, textSettingsLoud)
+    }
+}
+
+waitForContract()
+
