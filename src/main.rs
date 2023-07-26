@@ -21,10 +21,6 @@ mod telegam;
 lazy_static! {
      static  ref CONF: config::Config =config::load_config("src/config.json");
 }
-lazy_static! {
-    static ref CONF1: Arc<Mutex<config::Config>> = Arc::new(Mutex::new(config::load_config("src/config.json")));
-}
-
 
 lazy_static! {
     static ref DATA_UNI_V2: Vec<config::Dev> = config::load_data("src/data.json");
@@ -39,7 +35,7 @@ abigen!(Token, "abi/tokenabi.json");
 async fn main() -> Result<(), ()> {
     //let config: Mutex<config::Config> = Mutex::new(config::load_config("src/config.json"));
 
-    tokio::spawn(telegam::operate(BOT.clone(), &CONF1));
+    tokio::spawn(telegam::operate(BOT.clone(), &CONF));
     let ethereum: config::Ethereum = CONF.blockchain.ethereum.clone();
     // Logging
     // log4rs::init_file("log4rs.yml", Default::default()).unwrap();
