@@ -26,7 +26,7 @@ lazy_static! {
     static ref DATA_UNI_V2: Vec<config::Dev> = config::load_data("src/data.json");
 }
 lazy_static! {
-    static ref BOT: Bot = Bot::new("394446592:AAFhXQksbbdD1eJDtQmyrkqCwxj24ma7TzA");
+    static ref BOT: Bot = Bot::new("");
 }
 
 abigen!(Token, "abi/tokenabi.json");
