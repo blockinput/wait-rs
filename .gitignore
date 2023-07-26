@@ -3,3 +3,4 @@ src/config.json
 src/wait_rs
 bot
 GPT.md
+/.gpt-runner/
