@@ -1,32 +1,34 @@
 #![allow(non_snake_case, dead_code)]
 
-use ethers::prelude::*;
-use ethers::providers::{Http, Provider};
-use regex::Regex;
 use std::sync::Arc;
-use teloxide::types::ParseMode;
-//use log::{error, info};
-//use log4rs;
-//use serde::{Deserialize, Serialize};
 use std::thread::sleep;
 use std::time::Duration;
-use teloxide::prelude::*;
-//use tokio::runtime;
-mod config;
+
+use ethers::prelude::*;
+use ethers::providers::{Http, Provider};
+//use log::{error, info};
+//use log4rs;
 use lazy_static::lazy_static;
-use std::ascii::escape_default;
+use regex::Regex;
+use teloxide::prelude::*;
+use teloxide::types::ParseMode;
 use teloxide::utils::*;
+use tokio::sync::Mutex;
+
+mod config;
+mod telegam;
 
 lazy_static! {
-    static ref CONF: config::Config = config::load_config("src/config.json");
+     static  ref CONF: config::Config =config::load_config("src/config.json");
 }
+lazy_static! {
+    static ref CONF1: Arc<Mutex<config::Config>> = Arc::new(Mutex::new(config::load_config("src/config.json")));
+}
+
+
 lazy_static! {
     static ref DATA_UNI_V2: Vec<config::Dev> = config::load_data("src/data.json");
 }
-//static  CONF: Config = config::load_config("src/config.json");
-/*  */
-
-//static mut BOT: Bot = Bot::new("394446592:AAFhXQksbbdD1eJDtQmyrkqCwxj24ma7TzA");
 lazy_static! {
     static ref BOT: Bot = Bot::new("394446592:AAFhXQksbbdD1eJDtQmyrkqCwxj24ma7TzA");
 }
@@ -35,21 +37,16 @@ abigen!(Token, "abi/tokenabi.json");
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
-    //let bot: Bot = Bot::new("394446592:AAFhXQksbbdD1eJDtQmyrkqCwxj24ma7TzA");
-    //let conf:config::Config = config::load_config("src/config.json");
+    //let config: Mutex<config::Config> = Mutex::new(config::load_config("src/config.json"));
+
+    tokio::spawn(telegam::operate(BOT.clone(), &CONF1));
     let ethereum: config::Ethereum = CONF.blockchain.ethereum.clone();
     // Logging
     // log4rs::init_file("log4rs.yml", Default::default()).unwrap();
     //  let logger = log::logger();
 
-    // Provider
-
-    //println!("{:?}", CONF);
-
     let provider = Provider::<Http>::try_from(ethereum.http).unwrap();
-
     let client = Arc::new(provider.clone());
-
     let mut last_block = client.get_block_number().await.unwrap();
     loop {
         sleep(Duration::from_secs(19));
@@ -64,10 +61,7 @@ async fn main() -> Result<(), ()> {
 }
 
 async fn check_block(block_number: u64, client: Arc<Provider<Http>>) -> Result<(), ()> {
-    //let result = provider.get_block_with_txs(block_number).await.unwrap();
-
     let result = client.get_block_with_txs(block_number).await.unwrap();
-
     if let Some(block) = result {
         for element in &block.transactions {
             //show_dev_bydata(symbol.clone(), creates, dev).await;
@@ -88,7 +82,7 @@ async fn check_block(block_number: u64, client: Arc<Provider<Http>>) -> Result<(
                         for dev in DATA_UNI_V2.iter() {
                             let creator: H160 = dev.creator.parse().unwrap();
                             if element.from == creator {
-                                show_dev_bydata(symbol.clone(), creates, dev).await;
+                                let _ = show_dev_bydata(symbol.clone(), creates, dev).await;
                             }
                         }
                     }
@@ -96,8 +90,6 @@ async fn check_block(block_number: u64, client: Arc<Provider<Http>>) -> Result<(
                         //println!("method not exist");
                     }
                 }
-
-                //let contract = ethers::Contract::new(creates, contract_abi, provider.clone());
             }
         }
     }
@@ -106,8 +98,6 @@ async fn check_block(block_number: u64, client: Arc<Provider<Http>>) -> Result<(
 
 async fn check_nft(token_contract: Token<Provider<Http>>, creates: H160, symbol: String) -> bool {
     let original_u32: u32 = 0x1a3f02f4;
-    //println!("{}", original_u32);
-
     let u32_as_bytes: [u8; 4] = original_u32.to_be_bytes();
     //println!("{:?}", u32_as_bytes);
     //("supportsInterface", (0x80ac58cd,0xc8c6c9f3,0x1a3f02f4))
@@ -125,7 +115,7 @@ async fn check_nft(token_contract: Token<Provider<Http>>, creates: H160, symbol:
     let escaped_symbol = html::escape(&symbol);
     // Escape name
     let escaped_name = html::escape(&name);
-    show_nft(escaped_symbol.clone(), escaped_name.clone(), creates).await;
+    let _ = show_nft(escaped_symbol.clone(), escaped_name.clone(), creates).await;
     true
 }
 
@@ -142,15 +132,14 @@ async fn check_token(token_contract: Token<Provider<Http>>, creates: H160, symbo
     let escaped_symbol = html::escape(&symbol);
     // Escape name
     let escaped_name = html::escape(&name);
-
-    show_token(
+    let _ = show_token(
         escaped_symbol.clone(),
         escaped_name.clone(),
         supply,
         decimals,
         creates,
-    )
-    .await;
+    );
+
 
     //Сравниваем с именем
 
@@ -174,14 +163,20 @@ async fn check_token(token_contract: Token<Provider<Http>>, creates: H160, symbo
         }
     }
     if found {
-        show_dev(escaped_symbol, escaped_name, creates, "Found by Name or Ticker").await
+        show_dev(
+            escaped_symbol,
+            escaped_name,
+            creates,
+            "Found by Name or Ticker",
+        )
+            .await.unwrap()
     }
     dbg!(found);
 
     true
 }
 
-async fn show_nft(symbol: String, name: String, creates: H160) {
+async fn show_nft(symbol: String, name: String, creates: H160) -> Result<(), ()> {
     let msg = format!(
         "
 ticker: <code>{}</code>
@@ -197,9 +192,10 @@ exp: <a href=\"{}{:?}\">{:?}</a>",
         .parse_mode(ParseMode::Html)
         .await
         .unwrap();
+    Ok(())
 }
 
-async fn show_token(symbol: String, name: String, supply: U256, decimals: u8, creates: H160) {
+async fn show_token(symbol: String, name: String, supply: U256, decimals: u8, creates: H160) -> Result<(), ()> {
     //println!("{:?}", creates.clone());
     let format_supply = supply
         .checked_div(U256::from(10).pow(decimals.into()))
@@ -220,9 +216,10 @@ exp: <a href=\"{}{:?}\">{:?}</a>",
         .parse_mode(ParseMode::Html)
         .await
         .unwrap();
+    Ok(())
 }
 
-async fn show_dev(symbol: String, name: String, creates: H160, reason: &str) {
+async fn show_dev(symbol: String, name: String, creates: H160, reason: &str) -> Result<(), ()> {
     let msg = format!(
         "
 <b>{reason}</b>
@@ -240,9 +237,10 @@ exp: <a href=\"{}{:?}\">{:?}</a>",
         .parse_mode(ParseMode::Html)
         .await
         .unwrap();
+    Ok(())
 }
 
-async fn show_dev_bydata(symbol: String, creates: H160, dev: &config::Dev) {
+async fn show_dev_bydata(symbol: String, creates: H160, dev: &config::Dev) -> Result<(), ()> {
     let dev_creator = html::escape(&dev.creator);
     let dev_name = &dev.name;
     let dev_created_at_timestamp = html::escape(&dev.created_at_timestamp);
@@ -252,7 +250,6 @@ async fn show_dev_bydata(symbol: String, creates: H160, dev: &config::Dev) {
     let dev_id_token = html::escape(&dev.id_token);
     let dex = html::escape("https://dexscreener.com/ethereum/");
     let exp = &CONF.blockchain.ethereum.explorer.clone();
-
     let msg = format!(
         "
         <b>Dev Found by Data</b>
@@ -283,6 +280,7 @@ async fn show_dev_bydata(symbol: String, creates: H160, dev: &config::Dev) {
         .disable_web_page_preview(true)
         .await
         .unwrap();
+    Ok(())
 }
 
 /* async fn show_token(
@@ -318,12 +316,20 @@ link: [{}]({})",
     });
 } */
 
-fn escape_all(str: &String) -> String {
+
+/*
+fn escape_all() -> String {
+    let str = r#"Hello ? /world"#;
+/*
     let escaped_string = String::from_utf8(
         str.chars()
-            .flat_map(|c| escape_default(c as u8))
+            .flat_map(|c| {
+                escape_default(c as u8);
+                if c == "/".chars().nth(0).unwrap() {}
+            })
             .collect::<Vec<u8>>(),
-    );
+    );*/
+    dbg!(escaped_string);
     //println!("{:?}", escaped_string.clone());
     let new_string = escaped_string.unwrap();
     /*      new_string = new_string.replace(".", r#"\."#);
@@ -331,4 +337,4 @@ fn escape_all(str: &String) -> String {
     new_string = new_string.replace("-", r#"\-"#);
     println!("{:?}",new_string.clone()); */
     new_string
-}
+}*/
